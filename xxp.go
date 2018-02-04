@@ -1,10 +1,8 @@
 package xxp
-
 import (
-	"reflect"
-	"encoding/binary"
-	"bytes"
-	"log"
+"reflect"
+"encoding/binary"
+"bytes"
 )
 
 type coder struct {
@@ -17,44 +15,31 @@ func (c *coder) error(e error) {
 	panic(e)
 }
 
-func makeCoder(size uint32, order binary.ByteOrder) *coder {
+func makeCoder(order binary.ByteOrder) *coder {
 	c := &coder{}
-	c.Buf = bytes.NewBuffer(make([]byte, size, size))
+	c.Buf = bytes.NewBuffer(make([]byte, 0, 0))
 	c.Buf.Reset()
 	c.Order = order
 
 	return c
 }
 
-//xxp is a LV (length-value)_format protocol
-func (c *coder) encode(i interface{}) {
-	v := reflect.ValueOf(i)
-	switch v.Type().Kind() {
-	case reflect.Struct:
-		nf := v.NumField()
-		for i := 0; i < nf ; i++ {
-			c.marshalField(v.Field(i))
-		}
-	default:
-		c.marshalField(v)
-	}
+func (c *coder) encodeInterface(i interface{}) {
+	c.encodeValue(reflect.ValueOf(i))
 }
 
-func (c *coder) marshalField(v reflect.Value) {
-	//encode length
-	l := uint32(c.calculateLength(v))  //xxp only support 4 byte length
-	log.Println("field length is ", l)
-	c.encodeToBuf(reflect.ValueOf(l))
-
-	//encode buffer
-	c.encodeToBuf(v)
-}
-
-func (c *coder) encodeToBuf(data reflect.Value) {
+func (c *coder) encodeValue(data reflect.Value) {
 	var b [8]byte
 
-	k := data.Kind()
-	switch k {
+	switch k := data.Kind(); k {
+	case reflect.Int:
+		intSize := data.Type().Size()
+		if intSize == 4 {
+			c.encodeInterface(int32(data.Int()))
+		} else if intSize == 8 {
+			c.encodeInterface(data.Int())
+		}
+
 	case reflect.Int8:
 		b[0] = byte(data.Int())
 		c.Buf.Write(b[:1])
@@ -88,36 +73,123 @@ func (c *coder) encodeToBuf(data reflect.Value) {
 		c.Buf.Write(b[:8])
 
 	case reflect.String:
+		c.encodeInterface(data.Len())
 		c.Buf.Write([]byte(data.String()))
 
 	case reflect.Slice:
 		l := data.Len()
+		c.encodeInterface(l)
 		for i := 0; i < l; i++ {
-			c.encodeToBuf(data.Index(i))
+			c.encodeValue(data.Index(i))
 		}
 
 	case reflect.Array:
 		l := data.Len()
+		c.encodeInterface(l)
 		for i := 0; i < l; i++ {
-			c.encodeToBuf(data.Index(i))
+			c.encodeValue(data.Index(i))
+		}
+
+	case reflect.Map:
+		keys := data.MapKeys()
+		c.encodeInterface(len(keys))
+		for _, k := range  keys {
+			c.encodeValue(k)
+			c.encodeValue(data.MapIndex(k))
 		}
 
 	case reflect.Struct:
 		nf := data.NumField()
 		for f := 0; f < nf; f++ {
-			c.encodeToBuf(data.Field(f))
+			c.encodeValue(data.Field(f))
 		}
+	default:
+		c.error(&UnsupportType{data.Type()})
+	}
+}
+
+type decoder struct {
+	Buf *bytes.Buffer
+	Order binary.ByteOrder
+}
+
+func makeDecoder(buf *bytes.Buffer, order binary.ByteOrder) *decoder {
+	d := &decoder{}
+	d.Buf = buf;
+	d.Order = order
+	return d
+}
+
+func (d *decoder) decodeInterface(i interface{}) {
+	t := reflect.TypeOf(i)
+	if t.Kind() != reflect.Ptr {
+		d.error(&UnsupportType{t})
+	}
+	d.decodeValue(reflect.ValueOf(i))
+}
+
+func (d *decoder) decodeValue(data reflect.Value) {
+	v := reflect.Indirect(data)
+	if !v.CanSet() {
+		d.error(&UnsupportType{data.Type()})
+	}
+
+	switch v.Type().Kind() {
+	case reflect.Int8:
+		b, err := d.Buf.ReadByte()
+		if err != nil {
+			panic(err)
+		}
+		v.SetInt(int64(b))
+
+	case reflect.Int16:
+		b := d.Buf.Next(2)
+		v.SetInt(int64(d.Order.Uint16(b)))
+
+	case reflect.Int32:
+		b := d.Buf.Next(4)
+		v.SetInt(int64(d.Order.Uint32(b)))
+
+	case reflect.Uint32:
+		b := d.Buf.Next(4)
+		v.SetUint(uint64(d.Order.Uint32(b)))
+
+	case reflect.String:
+		l := d.Order.Uint64(d.Buf.Next(8))
+		b := d.Buf.Next(int(l))
+		v.SetString(string(b))
 
 	case reflect.Map:
-		keys := data.MapKeys()
-		for _, k := range  keys {
-			c.encodeToBuf(k)
-			c.encodeToBuf(data.MapIndex(k))
+		l := d.Order.Uint64(d.Buf.Next(8))
+
+		keyType := v.Type().Key()
+		valType := v.Type().Elem()
+
+		for i := 0; i < int(l); i++ {
+			keyPtr := reflect.New(keyType)
+			valPtr := reflect.New(valType)
+			d.decodeValue(keyPtr)
+			d.decodeValue(valPtr)
+
+			v.SetMapIndex(reflect.Indirect(keyPtr), reflect.Indirect(valPtr))
 		}
 
+	case reflect.Struct:
+		nf := v.NumField()
+		for f := 0; f < nf; f++ {
+			fieldPtr := reflect.New(v.Field(f).Type())
+			d.decodeValue(fieldPtr)
+
+			fieldVal := v.Field(f)
+			fieldVal.Set(reflect.Indirect(fieldPtr))
+		}
 	default:
-		c.error(&UnsupportEncodeType{data.Type()})
+		d.error(&UnsupportType{v.Type()})
 	}
+}
+
+func (d decoder) error(err error) {
+	panic(err)
 }
 
 func (c *coder) calculateLength(data reflect.Value) uint64 {
@@ -169,10 +241,10 @@ func (c *coder) calculateLength(data reflect.Value) uint64 {
 	}
 }
 
-type UnsupportEncodeType struct {
+type UnsupportType struct {
 	t reflect.Type
 }
 
-func (e *UnsupportEncodeType) Error() string {
+func (e *UnsupportType) Error() string {
 	return "Type " + e.t.Name() + " is not support for encoding"
 }

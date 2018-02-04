@@ -8,10 +8,10 @@ import (
 	"reflect"
 )
 
-func TestEncodeInteger(t *testing.T) {
-	c := makeCoder(0, binary.BigEndian)
+func TestInteger(t *testing.T) {
+	c := makeCoder(binary.BigEndian)
 	var i8 int8 = 1
-	var i16 int16 = 2
+	var i16 int16 = 123
 	var i32 int32 = 3
 	var i64 int64 = 4
 	var u8 uint8 = 5
@@ -19,56 +19,110 @@ func TestEncodeInteger(t *testing.T) {
 	var u32 uint32 = 7
 	var u64 uint64 = 8
 
-	c.encode(i8)
-	c.encode(i16)
-	c.encode(i32)
-	c.encode(i64)
-	c.encode(u8)
-	c.encode(u16)
-	c.encode(u32)
-	c.encode(u64)
+	c.encodeInterface(i8)
+	c.encodeInterface(i16)
+	c.encodeInterface(i32)
+	c.encodeInterface(i64)
+	c.encodeInterface(u8)
+	c.encodeInterface(u16)
+	c.encodeInterface(u32)
+	c.encodeInterface(u64)
+	log.Println("TestEncodeInteger: \n", hex.Dump(c.Buf.Bytes()))
 
-	log.Println("coder: \n", hex.Dump(c.Buf.Bytes()))
+	d := makeDecoder(c.Buf, c.Order)
+	var di8 int8 = 0
+	var di16 int16 = 0
+	//var di32 int32 = 0
+	//var di64 int64 = 0
+	//var du8 uint8 = 0
+	//var du16 uint16 = 0
+	//var du32 uint32 = 0
+	//var du64 uint64 = 0
+	//var di8 int8 = 0
+
+	d.decodeInterface(&di8)
+	log.Println("di8: ", di8)
+	if i8 != di8 {
+		log.Fatal("not equal")
+	}
+
+	d.decodeInterface(&di16)
+	log.Println("di16", di16)
+	if i16 != di16 {
+		t.Fatal("not equal")
+	}
+
+	log.Println("TestEncodeInteger: \n", hex.Dump(c.Buf.Bytes()))
+}
+
+func TestString(t *testing.T) {
+	c := makeCoder(binary.BigEndian)
+	var str string = "Hello, World"
+	c.encodeInterface(str)
+	log.Println("TestString: ", hex.Dump(c.Buf.Bytes()))
+
+	d := makeDecoder(c.Buf, c.Order)
+	dstr := ""
+	d.decodeInterface(&dstr)
+	log.Println("TestString dstr ", dstr)
+	if str != dstr {
+		t.Fatal("not equal")
+	}
+}
+
+func TestMap(t *testing.T) {
+	c := makeCoder(binary.BigEndian)
+	m := map[string]uint32{"hello":123}
+	m["oh"] = 789
+	c.encodeInterface(m)
+	log.Println("TestMap: \n", hex.Dump(c.Buf.Bytes()))
+
+	d := makeDecoder(c.Buf, c.Order)
+	dm := map[string]uint32{}
+	d.decodeInterface(&dm)
+	log.Println("TestMap dmap ", dm)
+	v, ok := dm["hello"]
+	if !ok || v != m["hello"] {
+		t.Fatal("key not exist")
+	}
+
+	v2, ok := dm["oh"]
+	if !ok || v2 != m["oh"] {
+		t.Fatal("key not exist")
+	}
 }
 
 func TestEncodeStruct(t *testing.T) {
-	c := makeCoder(4, binary.BigEndian)
+	c := makeCoder(binary.BigEndian)
 	type ts struct {
 		Id uint32
 		Name string
 	}
 
 	s := ts{7758, "Allen"}
-	log.Println("struct size ", len(s.Name))
-	c.encode(s)
-	log.Println("coder: \n", hex.Dump(c.Buf.Bytes()))
-}
+	c.encodeInterface(s)
+	log.Println("TestEncodeStruct: \n", hex.Dump(c.Buf.Bytes()))
 
-func TestCalculateLength(t *testing.T) {
-	c := makeCoder(0, binary.BigEndian)
-	type ts struct {
-		Id uint32
-		Ok uint32
-		Name string
+	d := makeDecoder(c.Buf, c.Order)
+	s2 := ts{}
+	d.decodeInterface(&s2)
+	log.Println("s2: ", s2)
+	if s != s2 {
+		t.Fatal("struct not equal")
 	}
-
-	s := ts{7758, 123, "Allen!"}
-	log.Println("length is ", c.calculateLength(reflect.ValueOf(s)))
-	c.encode(s)
-	log.Println("coder: \n", hex.Dump(c.Buf.Bytes()))
 }
 
 func TestEncodeMap(t *testing.T) {
-	c := makeCoder(0, binary.BigEndian)
+	c := makeCoder(binary.BigEndian)
 	m := map[uint32]string{}
 	m[1] = "Allen"
 	m[2] = "Alice"
-	c.encode(m)
-	log.Println("coder: \n", hex.Dump(c.Buf.Bytes()))
+	c.encodeInterface(m)
+	log.Println("TestEncodeMap: \n", hex.Dump(c.Buf.Bytes()))
 }
 
-func TestEveryOne(t *testing.T) {
-	c := makeCoder(0, binary.BigEndian)
+func TestAll(t *testing.T) {
+	c := makeCoder(binary.BigEndian)
 	type ts struct {
 		Id uint32
 		Name string
@@ -83,6 +137,21 @@ func TestEveryOne(t *testing.T) {
 	m[1] = "Allen"
 	m[2] = "Alice"
 	s.m = m
-	c.encode(s)
-	log.Println("coder: \n", hex.Dump(c.Buf.Bytes()))
+	c.encodeInterface(s)
+	log.Println("TestAll: \n", hex.Dump(c.Buf.Bytes()))
+}
+
+func change(i interface{}) {
+	t := reflect.TypeOf(i)
+	switch t.Kind() {
+	case reflect.Int32:
+		v := reflect.ValueOf(i)
+		v.SetInt(7758)
+	}
+}
+
+func TestValue(t *testing.T) {
+	var i uint32 = 0
+	change(i)
+	log.Println("i is ", i)
 }
